@@ -28,7 +28,6 @@
 [【指路】教程：导出并下载你的禁漫收藏夹数据](./assets/docs/sources/tutorial/10_export_favorites.md)
 
 
-## 一图看懂jmcomic（by NotebookLM）
 ![nblm_readme.png](./assets/docs/sources/images/nblm_readme.png)
 
 
