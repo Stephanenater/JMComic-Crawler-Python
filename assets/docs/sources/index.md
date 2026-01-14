@@ -10,6 +10,8 @@
 > [查看项目更新计划](TODO.md)
 
 
+## 一图看懂jmcomic（by NotebookLM） 
+![nblm_readme.png](images/nblm_readme.png)
 
 ## 入门
 
