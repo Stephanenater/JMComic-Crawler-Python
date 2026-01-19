@@ -1,0 +1,142 @@
+import os
+import shutil
+import zipfile
+import re
+import jmcomic
+from jmcomic import create_option, JmHtmlClient
+
+# ================= 配置区域 (适配 GitHub Actions) =================
+# 1. 优先从环境变量获取，获取不到则使用默认值
+# 在 GitHub Actions 中，这些值会通过 secrets 或 inputs 传入
+JM_USERNAME = os.getenv("JM_USERNAME", "你的用户名")
+JM_PASSWORD = os.getenv("JM_PASSWORD", "你的密码")
+
+# 2. 漫画 ID (支持从环境变量读取 "123-456" 这种格式)
+# 默认值留空，等待输入
+ENV_ALBUM_IDS = os.getenv("JM_ALBUM_IDS", "") 
+DEFAULT_ALBUM_ID = "438696" 
+
+# 3. 域名设置
+DOMAIN_LIST = [
+    '18comic.vip', '18comic.org', 'jmcomic.me', 'jmcomic1.me', 'jm-comic.cc',
+    'jmcomic.rocks', 'jmcomic.group'
+]
+
+# 4. 路径配置
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# GitHub Actions 通常在 workspace 下，我们直接用 download 目录
+DOWNLOAD_DIR = os.path.join(BASE_DIR, "download")
+# ===============================================================
+
+def natural_sort_key(s):
+    return [int(text) if text.isdigit() else text.lower()
+            for text in re.split('([0-9]+)', s)]
+
+def unzip_if_needed(folder_path):
+    if not os.path.exists(folder_path): return
+    for f in os.listdir(folder_path):
+        if f.endswith('.zip'):
+            src = os.path.join(folder_path, f)
+            dst = os.path.join(folder_path, os.path.splitext(f)[0])
+            try:
+                with zipfile.ZipFile(src, 'r') as zf: zf.extractall(dst)
+                os.remove(src)
+            except: pass
+
+def process_comic_for_comfyui(comic_root):
+    """
+    后期处理：合并章节、重命名，使其适合 ComfyUI
+    """
+    comic_name = os.path.basename(comic_root)
+    # 为了防止文件名乱码或过长，GitHub Actions Artifact 有时有限制，这里简化处理
+    merged_dir = os.path.join(BASE_DIR, f"{comic_name}_Merged")
+    
+    if os.path.exists(merged_dir): shutil.rmtree(merged_dir)
+    os.makedirs(merged_dir)
+    
+    print(f"\n🔄 [后期处理] 正在合并章节并重命名: {comic_name}...")
+    unzip_if_needed(comic_root)
+    
+    # 查找章节
+    chapters = [d for d in os.listdir(comic_root) if os.path.isdir(os.path.join(comic_root, d))]
+    chapters.sort(key=natural_sort_key)
+    
+    if not chapters:
+        print(f"❌ {comic_name} 未找到章节文件夹，跳过。")
+        return None
+
+    global_count = 1
+    for chapter in chapters:
+        c_path = os.path.join(comic_root, chapter)
+        images = [f for f in os.listdir(c_path) if f.lower().endswith(('.jpg','.png','.webp','.jpeg'))]
+        images.sort(key=natural_sort_key)
+        
+        print(f"   -> 合并章节: {chapter} ({len(images)}张)")
+        
+        for img in images:
+            ext = os.path.splitext(img)[1] or ".jpg"
+            new_name = f"{global_count:05d}{ext}"
+            shutil.copy2(os.path.join(c_path, img), os.path.join(merged_dir, new_name))
+            global_count += 1
+            
+    return merged_dir
+
+def get_album_ids():
+    """解析要下载的 ID 列表"""
+    if ENV_ALBUM_IDS:
+        # 支持用 - 或 , 或 空格 分隔
+        return re.split(r'[-,\s]+', ENV_ALBUM_IDS)
+    return [DEFAULT_ALBUM_ID]
+
+def run():
+    # 检查账号
+    if "你的用户名" in JM_USERNAME:
+        print("⚠️ 警告：未检测到有效的 JM_USERNAME，请检查 Secrets 设置！")
+
+    # 构建配置
+    jm_config = {
+        'dir_rule': {'base_dir': DOWNLOAD_DIR},
+        'client': {
+            'username': JM_USERNAME,
+            'password': JM_PASSWORD,
+            'domain_list': DOMAIN_LIST,
+        }
+    }
+
+    # 创建 Option
+    option = create_option(jm_config)
+    
+    album_ids = get_album_ids()
+    print(f"🚀 准备下载 ID 列表: {album_ids}")
+
+    for aid in album_ids:
+        if not aid: continue
+        try:
+            print(f"\n------ 开始下载 ID: {aid} ------")
+            jmcomic.download_album(aid, option)
+            
+            # 寻找刚才下载的文件夹
+            if not os.path.exists(DOWNLOAD_DIR): continue
+            
+            # 找到该 ID 对应的漫画目录（通过最后修改时间）
+            # 注意：如果并发下载多个可能会混淆，这里假设是一个个处理
+            subfolders = [f.path for f in os.scandir(DOWNLOAD_DIR) if f.is_dir()]
+            if not subfolders: continue
+            
+            # 简单的逻辑：取最新的文件夹作为刚刚下载的
+            target_comic = max(subfolders, key=os.path.getmtime)
+            
+            # 执行合并逻辑
+            process_comic_for_comfyui(target_comic)
+            
+            # 清理原始下载文件，节省空间
+            try: shutil.rmtree(target_comic)
+            except: pass
+
+        except Exception as e:
+            print(f"❌ 下载 ID {aid} 失败: {e}")
+
+    print("\n✅ 所有任务处理完成！")
+
+if __name__ == "__main__":
+    run()
